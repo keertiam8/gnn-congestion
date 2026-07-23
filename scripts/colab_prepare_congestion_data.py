@@ -113,33 +113,46 @@ def download_archive(source, dest_path, retries=2):
     )
 
 
-def _open_tar(path, max_layers=5):
+def _strip_gzip_layers_to_disk(path, max_layers=5):
     """CircuitNet's archives are sometimes gzipped more than once
-    (gzip(gzip(tar)) instead of a plain tar.gz). Chain streaming gzip
-    decompressors (never materializing the fully-decompressed bytes in one
-    go -- these masks are extremely compressible and can balloon from a few
-    MB to many GB, which is enough to crash a Colab runtime) and hand the
-    final stream to tarfile in pipe/stream mode.
+    (gzip(gzip(tar)) instead of a plain tar.gz). Peel off each layer to a
+    real temp file on disk, streamed in fixed-size chunks -- never holding a
+    fully-decompressed layer in RAM at once (these masks are extremely
+    compressible and a naive full decompress can balloon from a few MB to
+    many GB, enough to crash a Colab runtime).
 
-    Pipe mode is forward-only: callers must extract each wanted member as
-    they encounter it in a single `for member in tar:` pass -- you cannot
-    call getmembers() first and extract() from that list afterward."""
-    stream = open(path, "rb")
-    for _ in range(max_layers):
-        if stream.peek(2)[:2] != b"\x1f\x8b":
-            break
-        stream = gzip.GzipFile(fileobj=stream)
-    else:
-        raise RuntimeError(f"{path}: still gzip-compressed after {max_layers} layers -- unexpected nesting depth")
+    Returns the path to the final, plain-tar temp file. Caller is
+    responsible for the original `path` (untouched); intermediate layer
+    files are cleaned up as we go."""
+    current = path
+    for layer_num in range(max_layers):
+        with open(current, "rb") as f:
+            magic = f.peek(2)[:2]
+        if magic != b"\x1f\x8b":
+            return current
 
-    return tarfile.open(fileobj=stream, mode="r|")
+        next_path = f"{path}.layer{layer_num}"  # unique name per layer -- no collisions
+        with gzip.open(current, "rb") as src, open(next_path, "wb") as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+        if current != path:
+            os.remove(current)  # drop the previous intermediate layer (never the original download)
+        current = next_path
+
+    raise RuntimeError(f"{path}: still gzip-compressed after {max_layers} layers -- unexpected nesting depth")
+
+
+def _open_tar(path):
+    """Real, seekable tar file on disk -- normal random-access mode, so
+    getmembers()/extract() work as usual (no pipe-mode single-pass limits)."""
+    return tarfile.open(_strip_gzip_layers_to_disk(path), mode="r:")
 
 
 def _looks_like_valid_targz(path):
     try:
         with _open_tar(path) as tar:
-            first = tar.next()  # only reads the first header -- cheap, catches a broken/truncated stream early
-        return first is not None, None
+            tar.getmembers()  # forces a full read -- catches truncation, not just a broken header
+        return True, None
     except Exception as e:
         return False, str(e)
 
@@ -147,7 +160,7 @@ def _looks_like_valid_targz(path):
 def extract_matching(tar_path, keywords, sample_ids, extract_dir):
     extracted = 0
     with _open_tar(tar_path) as tar:
-        for member in tar:  # single forward pass -- required in pipe/stream mode
+        for member in tar.getmembers():
             if any(kw in member.name for kw in keywords) and (
                 sample_ids is None or os.path.basename(member.name) in sample_ids
             ):
@@ -157,14 +170,10 @@ def extract_matching(tar_path, keywords, sample_ids, extract_dir):
 
 
 def collect_sample_ids(tar_path, keywords, num_samples):
-    ids = []
     with _open_tar(tar_path) as tar:
-        for member in tar:  # single forward pass -- required in pipe/stream mode
-            if keywords[0] in member.name and not member.isdir():
-                ids.append(os.path.basename(member.name))
-                if len(ids) >= num_samples:
-                    break
-    return ids
+        names = [n for n in tar.getnames() if keywords[0] in n]
+        names = [n for n in names if not tar.getmember(n).isdir()]
+    return [os.path.basename(n) for n in names[:num_samples]]
 
 
 def resize(a):
