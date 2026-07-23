@@ -1,26 +1,31 @@
 """
 One-shot Colab script: download a handful of CircuitNet congestion samples,
-pack them into GPDL's training-set format, and zip the result for download.
+pack them into GPDL's training-set format, and run the pretrained-weight
+baseline evaluation against them -- all in one go.
 
-Fill in ARCHIVES below with your actual sources (Google Drive file IDs, direct
-URLs, or local paths if you've already downloaded them), then run:
+Run this from inside a clone of the gnn-congestion repo (so it has access to
+scripts/eval_baseline.py, gnn/gpdl.py, and checkpoints/congestion.pth):
 
-    !python colab_prepare_congestion_data.py --num-samples 20
+    !git clone https://github.com/keertiam8/gnn-congestion.git
+    %cd gnn-congestion
+    !python scripts/colab_prepare_congestion_data.py --num-samples 20
 
-Only ONE archive is ever resident on disk at a time (or, if streaming works
-for your source, NONE are fully written to disk) -- so peak usage stays
-around one archive's size instead of the sum of all five.
+Fill in ARCHIVES below with your actual Google Drive file IDs first.
 
-Output: /content/circuitnet/congestion_samples.zip containing
-    congestion/feature/<sample_id>.npy   (256, 256, 3)
-    congestion/label/<sample_id>.npy     (256, 256, 1)
-which matches what scripts/eval_baseline.py, scripts/preprocess_circuitnet.py,
-and scripts/inspect_data.py expect (point --root at the unzipped congestion/ dir).
+Only ONE archive is ever resident on disk at a time -- peak usage stays
+around one archive's size instead of the sum of all three.
+
+Output:
+    data/circuitnet_raw/congestion/feature/<sample_id>.npy   (256, 256, 3)
+    data/circuitnet_raw/congestion/label/<sample_id>.npy     (256, 256, 1)
+    results/baseline/baseline_metrics.json + heatmap PNGs (from eval_baseline.py)
 """
 
 import argparse
 import os
 import shutil
+import subprocess
+import sys
 import tarfile
 
 import numpy as np
@@ -54,8 +59,9 @@ ARCHIVES = {
 # (pick your smallest/fastest-to-list archive here)
 ID_SOURCE_KEY = "macro_region"
 
-EXTRACT_DIR = "/content/circuitnet/extracted"
-PACKED_DIR = "/content/circuitnet/training_set"
+DOWNLOAD_DIR = "/content/circuitnet_downloads"  # scratch space, outside the repo clone
+EXTRACT_DIR = "/content/circuitnet_downloads/extracted"
+PACKED_DIR = "data/circuitnet_raw"  # relative to repo root -- matches eval_baseline.py's default --root
 ROOT_KEY = "routability_features_decompressed"  # top-level folder inside CircuitNet archives
 
 
@@ -150,21 +156,45 @@ def pack_congestion(extract_dir, packed_dir, sample_ids):
     return num_ok
 
 
+def run_baseline_eval(congestion_dir, checkpoint="checkpoints/congestion.pth"):
+    if not os.path.exists("scripts/eval_baseline.py"):
+        print(
+            "\n[skipped baseline eval] scripts/eval_baseline.py not found in the "
+            "current directory -- run this script from the repo root (after "
+            "`git clone` + `%cd gnn-congestion`), or pass --no-eval and run "
+            "eval_baseline.py manually."
+        )
+        return
+    if not os.path.exists(checkpoint):
+        print(f"\n[skipped baseline eval] {checkpoint} not found.")
+        return
+
+    print("\n=== Running pretrained-weight baseline evaluation ===")
+    subprocess.run(
+        [sys.executable, "scripts/eval_baseline.py",
+         "--root", congestion_dir,
+         "--checkpoint", checkpoint,
+         "--save-heatmaps"],
+        check=True,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-samples", type=int, default=20)
-    parser.add_argument("--zip-out", default="/content/circuitnet/congestion_samples.zip")
-    parser.add_argument("--keep-extracted", action="store_true", help="don't delete /content/circuitnet/extracted afterward")
+    parser.add_argument("--keep-extracted", action="store_true", help=f"don't delete {EXTRACT_DIR} afterward")
+    parser.add_argument("--no-eval", action="store_true", help="skip running eval_baseline.py at the end")
+    parser.add_argument("--checkpoint", default="checkpoints/congestion.pth")
     args = parser.parse_args()
 
-    os.makedirs("/content/circuitnet", exist_ok=True)
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     sample_ids = None
 
     for name, cfg in ARCHIVES.items():
         if cfg["source"] == "FILL_ME_IN":
             raise ValueError(f"Set ARCHIVES['{name}']['source'] before running this script.")
 
-        tar_path = f"/content/circuitnet/{name}.tar.gz"
+        tar_path = f"{DOWNLOAD_DIR}/{name}.tar.gz"
         print(f"\n=== {name} ===")
         print("downloading...")
         download_archive(cfg["source"], tar_path)
@@ -191,15 +221,17 @@ def main():
         shutil.rmtree(EXTRACT_DIR, ignore_errors=True)
         print("cleaned up raw extracted files (kept only the packed feature/label npy)")
 
-    shutil.make_archive(args.zip_out.rsplit(".zip", 1)[0], "zip", PACKED_DIR)
-    print(f"\nDone. Zipped to {args.zip_out}")
+    congestion_dir = os.path.join(PACKED_DIR, "congestion")
+    print(f"\nData ready at {congestion_dir}")
 
-    try:
-        from google.colab import files
-
-        files.download(args.zip_out)
-    except ImportError:
-        print("(not running in Colab -- skipped auto-download, zip is at the path above)")
+    if not args.no_eval:
+        run_baseline_eval(congestion_dir, checkpoint=args.checkpoint)
+        print(
+            "\nDone. Baseline results at results/baseline/baseline_metrics.json "
+            "and heatmap PNGs at results/baseline/*.png"
+        )
+    else:
+        print("\nDone (baseline eval skipped, --no-eval was set).")
 
 
 if __name__ == "__main__":
