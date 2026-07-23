@@ -78,7 +78,7 @@ def download_archive(source, dest_path, retries=2):
         if is_drive_id(source):
             import gdown
 
-            gdown.download(id=source, output=dest_path, quiet=False, fuzzy=True)
+            gdown.download(id=source, output=dest_path, quiet=False)
         elif is_url(source):
             import requests
 
