@@ -40,13 +40,19 @@ from scipy import ndimage
 #   - a local path to an already-downloaded .tar.gz
 # ---------------------------------------------------------------------------
 ARCHIVES = {
+    # verified real structure (no routability_features_decompressed/ prefix,
+    # files sit directly at <top-level-folder>/<sample_id>, no .npy suffix):
     "macro_region": {
         "source": "FILL_ME_IN",
-        "keywords": ["macro_region"],
+        "keywords": ["macro_region/"],
     },
     "rudy": {
         "source": "FILL_ME_IN",
-        "keywords": ["RUDY/RUDY", "RUDY/RUDY_pin"],
+        "keywords": ["RUDY/"],
+    },
+    "rudy_pin": {
+        "source": "FILL_ME_IN",
+        "keywords": ["RUDY_pin/"],
     },
     "congestion": {
         "source": "FILL_ME_IN",
@@ -56,14 +62,14 @@ ARCHIVES = {
         ],
     },
 }
-# the archive whose keyword list is used to pick the sample_id subset
-# (pick your smallest/fastest-to-list archive here)
+# the archive whose keyword list is used to pick the sample_id subset --
+# macro_region is by far the smallest (~6MB vs 2.73GB for rudy), so picking
+# IDs from it avoids downloading a huge archive just to list sample names
 ID_SOURCE_KEY = "macro_region"
 
 DOWNLOAD_DIR = "/content/circuitnet_downloads"  # scratch space, outside the repo clone
 EXTRACT_DIR = "/content/circuitnet_downloads/extracted"
 PACKED_DIR = "data/circuitnet_raw"  # relative to repo root -- matches eval_baseline.py's default --root
-ROOT_KEY = "routability_features_decompressed"  # top-level folder inside CircuitNet archives
 
 
 def is_url(source):
@@ -190,21 +196,18 @@ def pack_congestion(extract_dir, packed_dir, sample_ids):
     os.makedirs(feature_dir, exist_ok=True)
     os.makedirs(label_dir, exist_ok=True)
 
-    root = os.path.join(extract_dir, ROOT_KEY)
     num_ok, num_fail = 0, 0
 
     for sid in sample_ids:
         try:
-            macro = np.load(os.path.join(root, "macro_region", sid))
-            rudy = np.load(os.path.join(root, "RUDY", "RUDY", sid))
-            rudy_pin = np.load(os.path.join(root, "RUDY", "RUDY_pin", sid))
+            macro = np.load(os.path.join(extract_dir, "macro_region", sid))
+            rudy = np.load(os.path.join(extract_dir, "RUDY", sid))
+            rudy_pin = np.load(os.path.join(extract_dir, "RUDY_pin", sid))
             h = np.load(os.path.join(
-                root, "congestion", "congestion_global_routing", "overflow_based",
-                "congestion_GR_horizontal_overflow", sid,
+                extract_dir, "overflow_based", "congestion_GR_horizontal_overflow", sid,
             ))
             v = np.load(os.path.join(
-                root, "congestion", "congestion_global_routing", "overflow_based",
-                "congestion_GR_vertical_overflow", sid,
+                extract_dir, "overflow_based", "congestion_GR_vertical_overflow", sid,
             ))
         except FileNotFoundError as e:
             print(f"[skip] {sid}: {e}")
