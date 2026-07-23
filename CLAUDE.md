@@ -23,9 +23,16 @@ download weights → WSL (next iteration).
 - `gnn/model.py` — `CongestionGNN` (GATv2-based), `nodes_to_grid_heatmap`
   (rasterizes per-node predictions to a grid), `CongestionTrainer`
   (pretrain_epoch for CircuitNet, finetune_step for per-design online tuning).
-- `scripts/` — data extraction / OpenROAD-report parsing (WIP).
+- `gnn/gpdl.py` — CircuitNet's official GPDL model (CNN U-Net, not a GNN),
+  reconstructed to exactly match `checkpoints/congestion.pth`'s state_dict.
+  Used only as a pretrained baseline predictor — architecturally incompatible
+  with `CongestionGNN`, so it can't warm-start it.
+- `scripts/` — data extraction / OpenROAD-report parsing (WIP);
+  `eval_baseline.py` runs the pretrained GPDL baseline against raw CircuitNet
+  samples and reports NRMSE/SSIM (the number the closed-loop GNN must beat).
 - `data/` — CircuitNet pretraining data + per-design extracted graphs/labels.
 - `checkpoints/` — saved model weights (pretrained + per-design fine-tuned).
+  `congestion.pth` = CircuitNet's official pretrained GPDL weights.
 - `results/` — predicted heatmaps, congestion reports, eval outputs.
 
 ## Conventions
@@ -36,5 +43,11 @@ download weights → WSL (next iteration).
 ## Status (as of last session)
 - OpenROAD build in progress in WSL2 (cmake configure/build).
 - `gnn/model.py` skeleton written; `torch_geometric` not yet installed locally.
-- Next: OpenROAD GCD example run, data extraction script, push to
-  `gnn-congestion` GitHub repo.
+- Confirmed `checkpoints/congestion.pth` is CircuitNet's pretrained GPDL
+  (CNN, in_channels=3, out_channels=1) — built `gnn/gpdl.py` +
+  `scripts/eval_baseline.py` to get a baseline NRMSE/SSIM number before
+  building the closed loop. Not yet run against real data (no raw CircuitNet
+  `.npy` samples downloaded locally yet — `data/` is still empty).
+- Next: download a raw CircuitNet congestion sample subset, run
+  `eval_baseline.py` to get the actual baseline numbers, then OpenROAD GCD
+  example run, data extraction script, push to `gnn-congestion` GitHub repo.

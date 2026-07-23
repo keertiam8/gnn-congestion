@@ -1,17 +1,18 @@
 """
-Quick inspection of raw CircuitNet congestion-subset files.
+Quick inspection of packaged CircuitNet congestion-subset files.
 
-CircuitNet (N28 congestion task) ships per-sample .npy feature maps, e.g.:
-    <sample_id>/macro_region.npy
-    <sample_id>/RUDY.npy
-    <sample_id>/RUDY_pin.npy
-    <sample_id>/congestion_label.npy   (or similar names -- verify below)
+CircuitNet's own preprocess_scripts/generate_training_set.py --task congestion
+packages samples as:
+    <root>/feature/<sample_id>.npy   (H, W, 3) -- macro_region, RUDY, RUDY_pin
+    <root>/label/<sample_id>.npy     (H, W, 1) -- combined GR overflow congestion
+already resized to 256x256 and min-max normalized per channel.
 
-Run this after downloading + extracting CircuitNet to confirm actual file
-names, shapes and value ranges before running preprocess_circuitnet.py.
+Run this after generating/downloading the packaged training set to confirm
+shapes and value ranges before running preprocess_circuitnet.py or
+eval_baseline.py.
 
 Usage:
-    python scripts/inspect_data.py --root data/circuitnet_raw
+    python scripts/inspect_data.py --root data/circuitnet_raw/congestion
 """
 
 import argparse
@@ -19,44 +20,44 @@ import os
 import numpy as np
 
 
-def inspect_sample(sample_dir):
-    print(f"\n=== {sample_dir} ===")
-    for fname in sorted(os.listdir(sample_dir)):
-        if not fname.endswith(".npy"):
+def inspect_pair(root, sample_id):
+    print(f"\n=== {sample_id} ===")
+    for subdir in ("feature", "label"):
+        path = os.path.join(root, subdir, sample_id)
+        if not os.path.exists(path):
+            print(f"  {subdir}: MISSING ({path})")
             continue
-        path = os.path.join(sample_dir, fname)
         arr = np.load(path)
         print(
-            f"  {fname:30s} shape={str(arr.shape):15s} "
+            f"  {subdir:10s} shape={str(arr.shape):15s} "
             f"dtype={arr.dtype} min={arr.min():.4f} max={arr.max():.4f} mean={arr.mean():.4f}"
         )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", required=True, help="root dir containing CircuitNet samples")
+    parser.add_argument("--root", required=True, help="dir containing feature/ and label/ subfolders")
     parser.add_argument("--num-samples", type=int, default=3, help="how many samples to inspect")
     args = parser.parse_args()
 
-    if not os.path.isdir(args.root):
+    feature_dir = os.path.join(args.root, "feature")
+    label_dir = os.path.join(args.root, "label")
+
+    if not os.path.isdir(feature_dir) or not os.path.isdir(label_dir):
         raise FileNotFoundError(
-            f"{args.root} does not exist. Download CircuitNet first "
-            f"(see scripts/README.md) and point --root at the extracted folder."
+            f"Expected {feature_dir} and {label_dir} to exist. Run "
+            f"generate_training_set.py --task congestion first, or point --root "
+            f"at wherever that output was copied to."
         )
 
-    entries = sorted(os.listdir(args.root))
-    sample_dirs = [os.path.join(args.root, e) for e in entries if os.path.isdir(os.path.join(args.root, e))]
-
-    if not sample_dirs:
-        # maybe .npy files are directly under root instead of per-sample subdirs
-        print(f"No subdirectories found under {args.root}. Files directly present:")
-        for fname in sorted(entries)[:20]:
-            print(" ", fname)
+    sample_ids = sorted(os.listdir(feature_dir))
+    if not sample_ids:
+        print(f"No files found under {feature_dir}.")
         return
 
-    print(f"Found {len(sample_dirs)} sample directories. Inspecting first {args.num_samples}...")
-    for d in sample_dirs[: args.num_samples]:
-        inspect_sample(d)
+    print(f"Found {len(sample_ids)} samples. Inspecting first {args.num_samples}...")
+    for sample_id in sample_ids[: args.num_samples]:
+        inspect_pair(args.root, sample_id)
 
 
 if __name__ == "__main__":
