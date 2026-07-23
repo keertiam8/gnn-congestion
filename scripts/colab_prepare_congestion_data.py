@@ -73,23 +73,52 @@ def is_drive_id(source):
     return not is_url(source) and not os.path.exists(source) and "/" not in source
 
 
-def download_archive(source, dest_path):
-    if is_drive_id(source):
-        import gdown
+def download_archive(source, dest_path, retries=2):
+    for attempt in range(1, retries + 2):
+        if is_drive_id(source):
+            import gdown
 
-        gdown.download(id=source, output=dest_path, quiet=False)
-    elif is_url(source):
-        import requests
+            gdown.download(id=source, output=dest_path, quiet=False, fuzzy=True)
+        elif is_url(source):
+            import requests
 
-        with requests.get(source, stream=True) as r:
-            r.raise_for_status()
-            with open(dest_path, "wb") as f:
-                shutil.copyfileobj(r.raw, f)
-    else:
-        # already a local file
-        if os.path.abspath(source) != os.path.abspath(dest_path):
-            shutil.copy(source, dest_path)
-    return dest_path
+            with requests.get(source, stream=True) as r:
+                r.raise_for_status()
+                with open(dest_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+        else:
+            # already a local file (e.g. a mounted Google Drive path)
+            if os.path.abspath(source) != os.path.abspath(dest_path):
+                shutil.copy(source, dest_path)
+
+        ok, reason = _looks_like_valid_targz(dest_path)
+        if ok:
+            return dest_path
+
+        print(f"[attempt {attempt}] download looks bad ({reason}), retrying..." if attempt <= retries
+              else f"download still bad after {retries} retries ({reason})")
+
+    with open(dest_path, "rb") as f:
+        preview = f.read(300)
+    raise RuntimeError(
+        f"{dest_path} failed to download as a valid tar.gz after {retries + 1} attempts "
+        f"({reason}). This is usually a truncated download -- gdown mishandling "
+        f"Google Drive's large-file confirm-token flow (fix: "
+        f"`!pip install --upgrade --no-cache-dir gdown` and rerun), or Drive's "
+        f"anonymous-download quota being hit on this shared link (fix without "
+        f"mounting Drive: wait a while and retry, or try a different mirror of "
+        f"the dataset if CircuitNet provides one, e.g. Baidu Netdisk or Hugging Face).\n"
+        f"First 300 bytes of what was downloaded:\n{preview}"
+    )
+
+
+def _looks_like_valid_targz(path):
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            tar.getmembers()  # forces full read -- catches truncation, not just the gzip header
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 def extract_matching(tar_path, keywords, sample_ids, extract_dir):
