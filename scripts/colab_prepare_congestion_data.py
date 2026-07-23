@@ -22,6 +22,8 @@ Output:
 """
 
 import argparse
+import gzip
+import io
 import os
 import shutil
 import subprocess
@@ -112,9 +114,31 @@ def download_archive(source, dest_path, retries=2):
     )
 
 
+def _strip_gzip_layers(path, max_layers=5):
+    """CircuitNet's archives are sometimes gzipped more than once
+    (gzip(gzip(tar)) instead of a plain tar.gz). Keep decompressing while the
+    result still starts with the gzip magic bytes, then hand back a
+    file-like object holding the final, plain tar bytes."""
+    with open(path, "rb") as f:
+        data = f.read()
+
+    for _ in range(max_layers):
+        if data[:2] != b"\x1f\x8b":
+            break
+        data = gzip.decompress(data)
+    else:
+        raise RuntimeError(f"{path}: still gzip-compressed after {max_layers} layers -- unexpected nesting depth")
+
+    return io.BytesIO(data)
+
+
+def _open_tar(path):
+    return tarfile.open(fileobj=_strip_gzip_layers(path), mode="r:")
+
+
 def _looks_like_valid_targz(path):
     try:
-        with tarfile.open(path, "r:gz") as tar:
+        with _open_tar(path) as tar:
             tar.getmembers()  # forces full read -- catches truncation, not just the gzip header
         return True, None
     except Exception as e:
@@ -123,7 +147,7 @@ def _looks_like_valid_targz(path):
 
 def extract_matching(tar_path, keywords, sample_ids, extract_dir):
     extracted = 0
-    with tarfile.open(tar_path, "r:gz") as tar:
+    with _open_tar(tar_path) as tar:
         for member in tar.getmembers():
             if any(kw in member.name for kw in keywords) and (
                 sample_ids is None or os.path.basename(member.name) in sample_ids
@@ -134,7 +158,7 @@ def extract_matching(tar_path, keywords, sample_ids, extract_dir):
 
 
 def collect_sample_ids(tar_path, keywords, num_samples):
-    with tarfile.open(tar_path, "r:gz") as tar:
+    with _open_tar(tar_path) as tar:
         names = [n for n in tar.getnames() if keywords[0] in n and n.endswith(".npy")]
     return [os.path.basename(n) for n in names[:num_samples]]
 
