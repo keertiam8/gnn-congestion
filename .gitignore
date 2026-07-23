@@ -41,7 +41,8 @@ ENV/
 # Data and model files (large, auto-generated or downloaded)
 data/
 checkpoints/
-results/
+results/*
+!results/baseline/
 
 # Environment variables
 .env
