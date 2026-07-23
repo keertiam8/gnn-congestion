@@ -23,7 +23,6 @@ Output:
 
 import argparse
 import gzip
-import io
 import os
 import shutil
 import subprocess
@@ -114,33 +113,33 @@ def download_archive(source, dest_path, retries=2):
     )
 
 
-def _strip_gzip_layers(path, max_layers=5):
+def _open_tar(path, max_layers=5):
     """CircuitNet's archives are sometimes gzipped more than once
-    (gzip(gzip(tar)) instead of a plain tar.gz). Keep decompressing while the
-    result still starts with the gzip magic bytes, then hand back a
-    file-like object holding the final, plain tar bytes."""
-    with open(path, "rb") as f:
-        data = f.read()
+    (gzip(gzip(tar)) instead of a plain tar.gz). Chain streaming gzip
+    decompressors (never materializing the fully-decompressed bytes in one
+    go -- these masks are extremely compressible and can balloon from a few
+    MB to many GB, which is enough to crash a Colab runtime) and hand the
+    final stream to tarfile in pipe/stream mode.
 
+    Pipe mode is forward-only: callers must extract each wanted member as
+    they encounter it in a single `for member in tar:` pass -- you cannot
+    call getmembers() first and extract() from that list afterward."""
+    stream = open(path, "rb")
     for _ in range(max_layers):
-        if data[:2] != b"\x1f\x8b":
+        if stream.peek(2)[:2] != b"\x1f\x8b":
             break
-        data = gzip.decompress(data)
+        stream = gzip.GzipFile(fileobj=stream)
     else:
         raise RuntimeError(f"{path}: still gzip-compressed after {max_layers} layers -- unexpected nesting depth")
 
-    return io.BytesIO(data)
-
-
-def _open_tar(path):
-    return tarfile.open(fileobj=_strip_gzip_layers(path), mode="r:")
+    return tarfile.open(fileobj=stream, mode="r|")
 
 
 def _looks_like_valid_targz(path):
     try:
         with _open_tar(path) as tar:
-            tar.getmembers()  # forces full read -- catches truncation, not just the gzip header
-        return True, None
+            first = tar.next()  # only reads the first header -- cheap, catches a broken/truncated stream early
+        return first is not None, None
     except Exception as e:
         return False, str(e)
 
@@ -148,7 +147,7 @@ def _looks_like_valid_targz(path):
 def extract_matching(tar_path, keywords, sample_ids, extract_dir):
     extracted = 0
     with _open_tar(tar_path) as tar:
-        for member in tar.getmembers():
+        for member in tar:  # single forward pass -- required in pipe/stream mode
             if any(kw in member.name for kw in keywords) and (
                 sample_ids is None or os.path.basename(member.name) in sample_ids
             ):
@@ -158,9 +157,14 @@ def extract_matching(tar_path, keywords, sample_ids, extract_dir):
 
 
 def collect_sample_ids(tar_path, keywords, num_samples):
+    ids = []
     with _open_tar(tar_path) as tar:
-        names = [n for n in tar.getnames() if keywords[0] in n and n.endswith(".npy")]
-    return [os.path.basename(n) for n in names[:num_samples]]
+        for member in tar:  # single forward pass -- required in pipe/stream mode
+            if keywords[0] in member.name and not member.isdir():
+                ids.append(os.path.basename(member.name))
+                if len(ids) >= num_samples:
+                    break
+    return ids
 
 
 def resize(a):
