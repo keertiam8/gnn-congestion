@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--out", default="checkpoints/pretrained.pt")
     parser.add_argument("--resume", default=None, help="path to existing checkpoint to continue training from")
+    parser.add_argument("--lr", type=float, default=1e-3)
     args = parser.parse_args()
 
     graphs = load_graphs(args.data)
@@ -49,7 +50,7 @@ def main():
     print(f"in_channels={in_channels}, device={device}")
 
     model = CongestionGNN(in_channels=in_channels)
-    trainer = CongestionTrainer(model, device=device)
+    trainer = CongestionTrainer(model, lr=args.lr, device=device)
 
     if args.resume:
         trainer.load(args.resume)

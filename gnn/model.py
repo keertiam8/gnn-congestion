@@ -32,20 +32,25 @@ class CongestionGNN(nn.Module):
             self.norms.append(nn.LayerNorm(hidden_channels))
 
         self.dropout = dropout
+        # head takes [h0 || h_final] -- a global skip from the pre-message-passing
+        # embedding straight to the output, so local/high-frequency detail lost to
+        # oversmoothing across `num_layers` of neighborhood averaging can still
+        # reach the prediction directly.
         self.head = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels // 2),
+            nn.Linear(hidden_channels * 2, hidden_channels // 2),
             nn.ReLU(),
             nn.Linear(hidden_channels // 2, 1),
         )
 
     def forward(self, x, edge_index):   #x is the node features
-        h = self.input_proj(x)  #each nodes 64 bit dimension representation, input_proj is a linear layer that projects the input features to hidden_channels dimension
+        h0 = self.input_proj(x)  #each nodes 64 bit dimension representation, input_proj is a linear layer that projects the input features to hidden_channels dimension
+        h = h0
         for conv, norm in zip(self.convs, self.norms):   #zip → [(Conv1, Norm1), (Conv2, Norm2), (Conv3, Norm3), (Conv4, Norm4)]
             h_new = conv(h, edge_index)
             h = norm(h + h_new)  # residual + norm
             h = F.relu(h)
             h = F.dropout(h, p=self.dropout, training=self.training)
-        out = self.head(h).squeeze(-1)
+        out = self.head(torch.cat([h0, h], dim=-1)).squeeze(-1)
         return out  # per-node congestion score (raw, apply sigmoid/scale outside if needed)
 
 
