@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--out", default="checkpoints/pretrained.pt")
+    parser.add_argument("--resume", default=None, help="path to existing checkpoint to continue training from")
     args = parser.parse_args()
 
     graphs = load_graphs(args.data)
@@ -49,6 +50,10 @@ def main():
 
     model = CongestionGNN(in_channels=in_channels)
     trainer = CongestionTrainer(model, device=device)
+
+    if args.resume:
+        trainer.load(args.resume)
+        print(f"Resumed weights from {args.resume}")
 
     best_val = float("inf")
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
