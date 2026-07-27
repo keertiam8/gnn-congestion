@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--out", default="checkpoints/pretrained.pt")
     parser.add_argument("--resume", default=None, help="path to existing checkpoint to continue training from")
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--peak-weight", type=float, default=2.0, help="upweight high-congestion nodes in the loss (0 = plain MSE)")
     args = parser.parse_args()
 
     graphs = load_graphs(args.data)
@@ -50,7 +51,7 @@ def main():
     print(f"in_channels={in_channels}, device={device}")
 
     model = CongestionGNN(in_channels=in_channels)
-    trainer = CongestionTrainer(model, lr=args.lr, device=device)
+    trainer = CongestionTrainer(model, lr=args.lr, peak_weight=args.peak_weight, device=device)
 
     if args.resume:
         trainer.load(args.resume)
@@ -67,7 +68,7 @@ def main():
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
-                pred = trainer.model(batch.x, batch.edge_index)
+                pred = trainer.model(batch.x, batch.edge_index, batch.batch)
                 val_loss += trainer.loss_fn(pred, batch.y).item()
         val_loss /= len(val_loader)
 

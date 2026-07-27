@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv, global_mean_pool
+from torch_geometric.nn.norm import GraphNorm
 from torch_geometric.data import Data
 
 
@@ -29,7 +30,13 @@ class CongestionGNN(nn.Module):
             self.convs.append(
                 GATv2Conv(hidden_channels, hidden_channels // heads, heads=heads, dropout=dropout)   #each cell learns from its neighbor via attention, in this u have 4 different types of attention example - wire distribution, macro proximity etc
             )
-            self.norms.append(nn.LayerNorm(hidden_channels))
+            # GraphNorm (not LayerNorm): normalizes per feature-channel across all
+            # nodes *in the same graph*, not per-node across its own channels.
+            # LayerNorm was forcing every node's own vector to the same scale,
+            # erasing the inter-node magnitude differences that encode "how
+            # congested is this node relative to others" -- a likely contributor
+            # to the compressed prediction variance seen during pretraining.
+            self.norms.append(GraphNorm(hidden_channels))
 
         self.dropout = dropout
         # head takes [h0 || h_final] -- a global skip from the pre-message-passing
@@ -42,12 +49,12 @@ class CongestionGNN(nn.Module):
             nn.Linear(hidden_channels // 2, 1),
         )
 
-    def forward(self, x, edge_index):   #x is the node features
+    def forward(self, x, edge_index, batch=None):   #x is the node features; batch=None means "treat as one graph" (GraphNorm's default)
         h0 = self.input_proj(x)  #each nodes 64 bit dimension representation, input_proj is a linear layer that projects the input features to hidden_channels dimension
         h = h0
         for conv, norm in zip(self.convs, self.norms):   #zip → [(Conv1, Norm1), (Conv2, Norm2), (Conv3, Norm3), (Conv4, Norm4)]
             h_new = conv(h, edge_index)
-            h = norm(h + h_new)  # residual + norm
+            h = norm(h + h_new, batch)  # residual + norm
             h = F.relu(h)
             h = F.dropout(h, p=self.dropout, training=self.training)
         out = self.head(torch.cat([h0, h], dim=-1)).squeeze(-1)
@@ -88,14 +95,22 @@ class CongestionTrainer:
     """Wraps the model with pretrain (CircuitNet, batched) and per-design
     online fine-tune (single design, few steps, low LR) loops."""
 
-    def __init__(self, model, lr=1e-3, finetune_lr=1e-4, device="cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, model, lr=1e-3, finetune_lr=1e-4, peak_weight=2.0, device="cuda" if torch.cuda.is_available() else "cpu"):
         self.model = model.to(device)
         self.device = device
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.finetune_lr = finetune_lr
+        # congestion-weighted MSE: most grid nodes are low/near-zero congestion,
+        # so plain MSE barely penalizes missing the rare high-congestion peaks
+        # (exactly the regions that matter most for routability). Weighting each
+        # node's squared error by (1 + peak_weight * target) makes higher-
+        # congestion nodes count more, pulling the predicted mean up toward the
+        # true mean instead of settling for "right on average, wrong at peaks."
+        self.peak_weight = peak_weight
 
     def loss_fn(self, pred, target):
-        return F.mse_loss(pred, target)
+        weight = 1.0 + self.peak_weight * target
+        return (weight * (pred - target) ** 2).mean()
 
     def pretrain_epoch(self, dataloader):
         self.model.train()
@@ -103,7 +118,7 @@ class CongestionTrainer:
         for batch in dataloader:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
-            pred = self.model(batch.x, batch.edge_index)
+            pred = self.model(batch.x, batch.edge_index, batch.batch)
             loss = self.loss_fn(pred, batch.y)
             loss.backward()
             self.optimizer.step()
