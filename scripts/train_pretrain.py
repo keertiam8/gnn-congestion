@@ -34,7 +34,8 @@ def main():
     parser.add_argument("--out", default="checkpoints/pretrained.pt")
     parser.add_argument("--resume", default=None, help="path to existing checkpoint to continue training from")
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--peak-weight", type=float, default=2.0, help="upweight high-congestion nodes in the loss (0 = plain MSE)")
+    parser.add_argument("--peak-weight", type=float, default=1.0, help="upweight high-congestion nodes in the loss (0 = plain MSE)")
+    parser.add_argument("--variance-weight", type=float, default=0.5, help="penalize (pred.std() - target.std())^2 to stop the model collapsing variance (0 = disabled)")
     args = parser.parse_args()
 
     graphs = load_graphs(args.data)
@@ -51,7 +52,7 @@ def main():
     print(f"in_channels={in_channels}, device={device}")
 
     model = CongestionGNN(in_channels=in_channels)
-    trainer = CongestionTrainer(model, lr=args.lr, peak_weight=args.peak_weight, device=device)
+    trainer = CongestionTrainer(model, lr=args.lr, peak_weight=args.peak_weight, variance_weight=args.variance_weight, device=device)
 
     if args.resume:
         trainer.load(args.resume)

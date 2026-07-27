@@ -95,7 +95,7 @@ class CongestionTrainer:
     """Wraps the model with pretrain (CircuitNet, batched) and per-design
     online fine-tune (single design, few steps, low LR) loops."""
 
-    def __init__(self, model, lr=1e-3, finetune_lr=1e-4, peak_weight=2.0, device="cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, model, lr=1e-3, finetune_lr=1e-4, peak_weight=1.0, variance_weight=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
         self.model = model.to(device)
         self.device = device
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
@@ -107,10 +107,19 @@ class CongestionTrainer:
         # congestion nodes count more, pulling the predicted mean up toward the
         # true mean instead of settling for "right on average, wrong at peaks."
         self.peak_weight = peak_weight
+        # a high peak_weight alone can be gamed by uniformly shifting all
+        # predictions up (raises the mean without learning to discriminate
+        # peaks from background, which *lowers* variance instead of raising
+        # it -- observed empirically: pred std dropped to 0.0086 vs label's
+        # 0.018 once peak_weight=2.0 was introduced). Explicitly penalizing
+        # the gap between predicted and true std closes off that shortcut.
+        self.variance_weight = variance_weight
 
     def loss_fn(self, pred, target):
         weight = 1.0 + self.peak_weight * target
-        return (weight * (pred - target) ** 2).mean()
+        weighted_mse = (weight * (pred - target) ** 2).mean()
+        variance_penalty = (pred.std() - target.std()) ** 2
+        return weighted_mse + self.variance_weight * variance_penalty
 
     def pretrain_epoch(self, dataloader):
         self.model.train()
