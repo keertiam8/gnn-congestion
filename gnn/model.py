@@ -143,10 +143,19 @@ class CongestionTrainer:
         return nodes_to_grid_heatmap(pred, node_xy, grid_size=grid_size)
 
     def save(self, path):
-        torch.save(self.model.state_dict(), path)
+        torch.save({
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+        }, path)
 
     def load(self, path):
-        self.model.load_state_dict(torch.load(path, map_location=self.device))
+        ckpt = torch.load(path, map_location=self.device)
+        if "model" in ckpt:
+            self.model.load_state_dict(ckpt["model"])
+            self.optimizer.load_state_dict(ckpt["optimizer"])
+        else:
+            # backward-compat with older checkpoints saved as a bare state_dict
+            self.model.load_state_dict(ckpt)
 
 
 if __name__ == "__main__":
