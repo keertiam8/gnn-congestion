@@ -27,7 +27,7 @@ class CongestionGNN(nn.Module):
         self.norms = nn.ModuleList()
         for _ in range(num_layers):
             self.convs.append(
-                GATv2Conv(hidden_channels, hidden_channels // heads, heads=heads, dropout=dropout)
+                GATv2Conv(hidden_channels, hidden_channels // heads, heads=heads, dropout=dropout)   #each cell learns from its neighbor via attention, in this u have 4 different types of attention example - wire distribution, macro proximity etc
             )
             self.norms.append(nn.LayerNorm(hidden_channels))
 
