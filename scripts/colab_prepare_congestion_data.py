@@ -43,19 +43,19 @@ ARCHIVES = {
     # verified real structure (no routability_features_decompressed/ prefix,
     # files sit directly at <top-level-folder>/<sample_id>, no .npy suffix):
     "macro_region": {
-        "source": "FILL_ME_IN",
+        "source": "14n9khpSK56NUZrGUNPPRYmZkAbCOstKq",
         "keywords": ["macro_region/"],
     },
     "rudy": {
-        "source": "FILL_ME_IN",
+        "source": "1KUocSofLvyAFKXu8AXt4j3TPJsiaCjS6",
         "keywords": ["RUDY/"],
     },
     "rudy_pin": {
-        "source": "FILL_ME_IN",
+        "source": "1oRrJ9f9OOitzwlUKHYJh1Gt_KxqUaarK",
         "keywords": ["RUDY_pin/"],
     },
     "congestion": {
-        "source": "FILL_ME_IN",
+        "source": "1aFFT6A32ybvKsTcFZGEQuARa8ipurke_",
         "keywords": [
             "congestion_GR_horizontal_overflow",
             "congestion_GR_vertical_overflow",
