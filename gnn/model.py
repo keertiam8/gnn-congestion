@@ -21,7 +21,7 @@ from torch_geometric.data import Data
 class CongestionGNN(nn.Module):
     def __init__(self, in_channels, hidden_channels=64, num_layers=4, heads=4, dropout=0.1):
         super().__init__()
-        self.input_proj = nn.Linear(in_channels, hidden_channels)
+        self.input_proj = nn.Linear(in_channels, hidden_channels)   #hidden channels is the number of output dimensions after u multiply the feature matrix with a 8x64 matrix of weights
 
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList()
@@ -38,9 +38,9 @@ class CongestionGNN(nn.Module):
             nn.Linear(hidden_channels // 2, 1),
         )
 
-    def forward(self, x, edge_index):
-        h = self.input_proj(x)
-        for conv, norm in zip(self.convs, self.norms):
+    def forward(self, x, edge_index):   #x is the node features
+        h = self.input_proj(x)  #each nodes 64 bit dimension representation, input_proj is a linear layer that projects the input features to hidden_channels dimension
+        for conv, norm in zip(self.convs, self.norms):   #zip → [(Conv1, Norm1), (Conv2, Norm2), (Conv3, Norm3), (Conv4, Norm4)]
             h_new = conv(h, edge_index)
             h = norm(h + h_new)  # residual + norm
             h = F.relu(h)
