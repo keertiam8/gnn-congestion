@@ -40,7 +40,6 @@ ENV/
 
 # Data and model files (large, auto-generated or downloaded)
 data/
-checkpoints/
 results/*
 !results/baseline/
 
