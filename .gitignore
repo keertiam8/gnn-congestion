@@ -57,3 +57,7 @@ Thumbs.db
 
 # Local development
 .claude/
+
+# But allow our own design source data
+!data/raw/
+!data/raw/**
