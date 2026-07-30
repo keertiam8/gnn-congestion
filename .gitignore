@@ -40,8 +40,7 @@ ENV/
 
 # Data and model files (large, auto-generated or downloaded)
 data/
-results/*
-!results/baseline/
+
 
 # Environment variables
 .env
