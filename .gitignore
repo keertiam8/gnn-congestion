@@ -34,9 +34,7 @@ ENV/
 *~
 .DS_Store
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+
 
 # Data and model files (large, auto-generated or downloaded)
 data/
