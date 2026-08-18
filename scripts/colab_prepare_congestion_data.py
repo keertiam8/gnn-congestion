@@ -50,10 +50,7 @@ ARCHIVES = {
         "source": "1KUocSofLvyAFKXu8AXt4j3TPJsiaCjS6",
         "keywords": ["RUDY/"],
     },
-    "rudy_pin": {
-        "source": "1oRrJ9f9OOitzwlUKHYJh1Gt_KxqUaarK",
-        "keywords": ["RUDY_pin/"],
-    },
+
     "congestion": {
         "source": "1aFFT6A32ybvKsTcFZGEQuARa8ipurke_",
         "keywords": [
