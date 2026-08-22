@@ -176,18 +176,23 @@ class CongestionTrainer:
 
         return weighted_mse + self.variance_weight * variance_penalty
 
+
     def pretrain_epoch(self, dataloader):
-        """
-        One epoch of pretraining on CircuitNet batched data.
-        Each batch.x: (N, 2), batch.y: (N, 2)
-        """
         self.model.train()
         total_loss = 0.0
         for batch in dataloader:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
-            pred = self.model(batch.x, batch.edge_index, batch.batch)  # (N, 2)
-            loss = self.loss_fn(pred, batch.y)
+            pred = self.model(batch.x, batch.edge_index, batch.batch)
+
+            # If graphs have virtual net-nodes (star-expansion netlist graphs),
+            # only compute loss on real cells -- net-nodes have no true label.
+            if hasattr(batch, "cell_mask"):
+                mask = batch.cell_mask
+                loss = self.loss_fn(pred[mask], batch.y[mask])
+            else:
+                loss = self.loss_fn(pred, batch.y)
+
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()

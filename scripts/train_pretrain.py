@@ -64,13 +64,18 @@ def main():
     for epoch in range(1, args.epochs + 1):
         train_loss = trainer.pretrain_epoch(train_loader)
 
+        # NEW
         trainer.model.eval()
         val_loss = 0.0
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
                 pred = trainer.model(batch.x, batch.edge_index, batch.batch)
-                val_loss += trainer.loss_fn(pred, batch.y).item()
+                if hasattr(batch, "cell_mask"):
+                    mask = batch.cell_mask
+                    val_loss += trainer.loss_fn(pred[mask], batch.y[mask]).item()
+                else:
+                    val_loss += trainer.loss_fn(pred, batch.y).item()
         val_loss /= len(val_loader)
 
         print(f"epoch {epoch:03d}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")

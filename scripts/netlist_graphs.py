@@ -1,9 +1,21 @@
 """
 Build netlist-based graphs combining:
-  - Topology (node_attr, pin_attr from graph_information.tar.gz -> cell-to-cell edges)
+  - Topology (node_attr, pin_attr from graph_information.tar.gz -> cell-to-net star topology)
   - Positions (instance_placement_micron -> x,y per cell)
   - Spatial context (macro_region, RUDY grids -> sampled per cell)
   - Labels (congestion grid -> sampled per cell)
+
+Uses STAR expansion instead of clique expansion for net connectivity:
+  each net becomes a virtual "net node" connected to all its pins' cells,
+  instead of connecting every pair of cells on the net directly.
+  This keeps edge count O(#pins) instead of O(#pins^2) per net, avoiding
+  the massive clique blowup from high-fanout nets (clock, reset, etc.)
+  while still letting message passing propagate cell<->cell info through
+  the shared net node in 2 hops instead of 1.
+
+  Real cells keep their real node features (x, y, macro, rudy).
+  Virtual net nodes get zeroed-out placeholder features (no physical
+  location) and are excluded from the loss (only real cells have labels).
 
 Usage:
     python scripts/build_netlist_graphs.py \
@@ -23,15 +35,18 @@ import torch
 from torch_geometric.data import Data
 
 
-def load_netlist_topology(design_family, graph_info_dir):
-    """Load node names/types and build cell-to-cell edges from pin connectivity.
-    Robust to pins whose net_index/node_index entry is itself a list
-    (e.g. bus-style pins attached to multiple nets or instances)."""
+def load_netlist_topology_star(design_family, graph_info_dir):
+    """Load node names and build a bipartite cell<->net_node graph.
+
+    Real cells are nodes [0, num_cells).
+    Virtual net-nodes are appended as nodes [num_cells, num_cells+num_nets).
+    Edges connect each pin's cell to its virtual net-node (bidirectional).
+    """
     node_attr = np.load(f"{graph_info_dir}/node_attr/{design_family}_node_attr.npy", allow_pickle=True)
     pin_attr = np.load(f"{graph_info_dir}/pin_attr/{design_family}_pin_attr.npy", allow_pickle=True)
 
     instance_names = node_attr[0]
-    num_nodes = len(instance_names)
+    num_cells = len(instance_names)
 
     raw_net_indices = pin_attr[1]
     raw_node_indices = pin_attr[2]
@@ -41,24 +56,29 @@ def load_netlist_topology(design_family, graph_info_dir):
             return [int(v) for v in val]
         return [int(val)]
 
-    net_to_nodes = defaultdict(set)
+    # collect (net, cell) pairs, dedup
+    pairs = set()
+    max_net_idx = -1
     for net_val, node_val in zip(raw_net_indices, raw_node_indices):
         nets = _as_int_list(net_val)
-        nodes = _as_int_list(node_val)
+        cells = _as_int_list(node_val)
         for n in nets:
-            for c in nodes:
-                net_to_nodes[n].add(c)
+            max_net_idx = max(max_net_idx, n)
+            for c in cells:
+                pairs.add((n, c))
+
+    num_nets = max_net_idx + 1
+    total_nodes = num_cells + num_nets
 
     src, dst = [], []
-    for nodes in net_to_nodes.values():
-        nodes = list(nodes)
-        for i in range(len(nodes)):
-            for j in range(i + 1, len(nodes)):
-                src += [nodes[i], nodes[j]]
-                dst += [nodes[j], nodes[i]]
+    for net_idx, cell_idx in pairs:
+        net_node_idx = num_cells + net_idx
+        # bidirectional: cell <-> net_node
+        src += [cell_idx, net_node_idx]
+        dst += [net_node_idx, cell_idx]
 
     edge_index = torch.tensor([src, dst], dtype=torch.long) if src else torch.zeros((2, 0), dtype=torch.long)
-    return instance_names, edge_index, num_nodes
+    return instance_names, edge_index, num_cells, num_nets, total_nodes
 
 
 def sample_grid_at_position(grid, x, y, die_xmax, die_ymax):
@@ -71,15 +91,8 @@ def sample_grid_at_position(grid, x, y, die_xmax, die_ymax):
 
 
 def design_family_from_sample_id(sample_id):
-    """
-    sample_id like '7393-zero-riscy-a-1-c5-u0.75-m1-p1-f0'
-    design_family like 'zero-riscy-a-1-c5' (drop leading numeric id and
-    trailing u/m/p/f variation tags).
-    """
     parts = sample_id.split('-')
-    # drop leading numeric id
     parts = parts[1:]
-    # drop trailing tags starting with u/m/p/f followed by digits
     cut = len(parts)
     for i, p in enumerate(parts):
         if len(p) > 1 and p[0] in "ump" and p[1:].replace('.', '', 1).isdigit():
@@ -102,7 +115,9 @@ def build_netlist_graph(sample_id, graph_info_dir, placement_dir, congestion_roo
         if not os.path.exists(p):
             raise FileNotFoundError(f"missing {p}")
 
-    instance_names, edge_index, num_nodes = load_netlist_topology(design_family, graph_info_dir)
+    instance_names, edge_index, num_cells, num_nets, total_nodes = load_netlist_topology_star(
+        design_family, graph_info_dir
+    )
     placement = np.load(placement_path, allow_pickle=True).item()
 
     feature = np.load(feature_path)  # (H, W, 2) macro_region, RUDY
@@ -115,6 +130,7 @@ def build_netlist_graph(sample_id, graph_info_dir, placement_dir, congestion_roo
     die_xmax = max(v[2] for v in placement.values())
     die_ymax = max(v[3] for v in placement.values())
 
+    # --- real cell features/labels ---
     x_coords, y_coords = [], []
     macro_ctx, rudy_ctx, congestion_labels = [], [], []
 
@@ -133,25 +149,44 @@ def build_netlist_graph(sample_id, graph_info_dir, placement_dir, congestion_roo
 
     x_coords = np.array(x_coords, dtype=np.float32) / (die_xmax + 1e-9)
     y_coords = np.array(y_coords, dtype=np.float32) / (die_ymax + 1e-9)
+    macro_ctx = np.array(macro_ctx, dtype=np.float32)
+    rudy_ctx = np.array(rudy_ctx, dtype=np.float32)
+    congestion_labels = np.array(congestion_labels, dtype=np.float32)
 
-    node_features = np.stack(
-        [x_coords, y_coords, np.array(macro_ctx, dtype=np.float32), np.array(rudy_ctx, dtype=np.float32)],
-        axis=1,
-    )
+    # --- virtual net-node features: zeroed placeholders (no physical location) ---
+    net_x = np.zeros(num_nets, dtype=np.float32)
+    net_y = np.zeros(num_nets, dtype=np.float32)
+    net_macro = np.zeros(num_nets, dtype=np.float32)
+    net_rudy = np.zeros(num_nets, dtype=np.float32)
+    net_labels = np.zeros(num_nets, dtype=np.float32)  # masked out of loss below
+
+    all_x = np.concatenate([x_coords, net_x])
+    all_y = np.concatenate([y_coords, net_y])
+    all_macro = np.concatenate([macro_ctx, net_macro])
+    all_rudy = np.concatenate([rudy_ctx, net_rudy])
+    all_labels = np.concatenate([congestion_labels, net_labels])
+
+    node_features = np.stack([all_x, all_y, all_macro, all_rudy], axis=1)
+
+    # mask: True for real cells (used in loss), False for virtual net-nodes
+    is_real_cell = torch.zeros(total_nodes, dtype=torch.bool)
+    is_real_cell[:num_cells] = True
 
     return Data(
         x=torch.tensor(node_features, dtype=torch.float32),
         edge_index=edge_index,
-        y=torch.tensor(congestion_labels, dtype=torch.float32),
-        num_nodes=num_nodes,
+        y=torch.tensor(all_labels, dtype=torch.float32),
+        cell_mask=is_real_cell,   # NEW: use this to mask loss/eval to real cells only
+        num_nodes=total_nodes,
+        num_cells=num_cells,
     )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--graph-info", required=True, help="dir with node_attr/, net_attr/, pin_attr/")
-    parser.add_argument("--placement", required=True, help="dir with instance_placement_micron .npy files")
-    parser.add_argument("--congestion-root", required=True, help="dir with feature/ and label/ subfolders")
+    parser.add_argument("--graph-info", required=True)
+    parser.add_argument("--placement", required=True)
+    parser.add_argument("--congestion-root", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
