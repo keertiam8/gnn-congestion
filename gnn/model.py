@@ -83,20 +83,11 @@ class CongestionGNN(nn.Module):
         return out
 
 
+# NEW
 def nodes_to_grid_heatmap(node_scores, node_xy, grid_size=(64, 64), die_area=None):
     """
-    Rasterize per-node congestion scores into a 2-channel grid heatmap.
-
-    Args:
-        node_scores: (N, 2) tensor of predicted congestion [h_overflow, v_overflow]
-        node_xy:     (N, 2) tensor of node placement coordinates [x, y]
-        grid_size:   (gx, gy) output grid dimensions
-        die_area:    (xmin, ymin, xmax, ymax); if None, inferred from node_xy
-
-    Returns:
-        heatmap: (gx, gy, 2) grid where:
-                 heatmap[:, :, 0] = horizontal congestion
-                 heatmap[:, :, 1] = vertical congestion
+    Rasterize per-node congestion scores into a grid heatmap.
+    Handles both single-channel (N,) and multi-channel (N, C) node_scores.
     """
     device = node_scores.device
     gx, gy = grid_size
@@ -107,23 +98,25 @@ def nodes_to_grid_heatmap(node_scores, node_xy, grid_size=(64, 64), die_area=Non
     else:
         xmin, ymin, xmax, ymax = die_area
 
-    # 2-channel heatmap and count grids
-    heatmap = torch.zeros(gx, gy, 2, device=device)
-    counts  = torch.zeros(gx, gy, 2, device=device)
+    single_channel = node_scores.dim() == 1
+    if single_channel:
+        node_scores = node_scores.unsqueeze(-1)  # (N,) -> (N, 1)
 
-    # Map each node's (x, y) coordinates → grid (col, row) position
+    C = node_scores.shape[1]
+    heatmap = torch.zeros(gx, gy, C, device=device)
+    counts  = torch.zeros(gx, gy, C, device=device)
+
     col = ((node_xy[:, 0] - xmin) / (xmax - xmin + 1e-9) * (gx - 1)).long().clamp(0, gx - 1)
     row = ((node_xy[:, 1] - ymin) / (ymax - ymin + 1e-9) * (gy - 1)).long().clamp(0, gy - 1)
 
-    # Convert 2D grid position → 1D index for scatter operation
-    idx = row * gx + col  # (N,)
+    idx = row * gx + col
+    heatmap.view(-1, C).index_add_(0, idx, node_scores)
+    counts.view(-1, C).index_add_(0, idx, torch.ones_like(node_scores))
 
-    # Accumulate node scores into grid cells (both channels at once)
-    heatmap.view(-1, 2).index_add_(0, idx, node_scores)
-    counts.view(-1, 2).index_add_(0, idx, torch.ones_like(node_scores))
-
-    # Average scores per grid cell
-    return heatmap / counts.clamp(min=1)  # (gx, gy, 2)
+    result = heatmap / counts.clamp(min=1)
+    if single_channel:
+        result = result.squeeze(-1)  # (gx, gy, 1) -> (gx, gy)
+    return result
 
 
 class CongestionTrainer:
