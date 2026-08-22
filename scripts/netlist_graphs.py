@@ -24,19 +24,30 @@ from torch_geometric.data import Data
 
 
 def load_netlist_topology(design_family, graph_info_dir):
-    """Load node names/types and build cell-to-cell edges from pin connectivity."""
+    """Load node names/types and build cell-to-cell edges from pin connectivity.
+    Robust to pins whose net_index/node_index entry is itself a list
+    (e.g. bus-style pins attached to multiple nets or instances)."""
     node_attr = np.load(f"{graph_info_dir}/node_attr/{design_family}_node_attr.npy", allow_pickle=True)
     pin_attr = np.load(f"{graph_info_dir}/pin_attr/{design_family}_pin_attr.npy", allow_pickle=True)
 
     instance_names = node_attr[0]
     num_nodes = len(instance_names)
 
-    net_indices = pin_attr[1].astype(int)
-    node_indices = pin_attr[2].astype(int)
+    raw_net_indices = pin_attr[1]
+    raw_node_indices = pin_attr[2]
+
+    def _as_int_list(val):
+        if isinstance(val, (list, tuple, np.ndarray)):
+            return [int(v) for v in val]
+        return [int(val)]
 
     net_to_nodes = defaultdict(set)
-    for net_idx, node_idx in zip(net_indices, node_indices):
-        net_to_nodes[net_idx].add(node_idx)
+    for net_val, node_val in zip(raw_net_indices, raw_node_indices):
+        nets = _as_int_list(net_val)
+        nodes = _as_int_list(node_val)
+        for n in nets:
+            for c in nodes:
+                net_to_nodes[n].add(c)
 
     src, dst = [], []
     for nodes in net_to_nodes.values():
