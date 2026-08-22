@@ -34,7 +34,11 @@ from gnn.gpdl import load_pretrained_gpdl
 def load_sample(root, sample_id):
     feature = np.load(os.path.join(root, "feature", sample_id))  # (H, W, 3)
     label = np.load(os.path.join(root, "label", sample_id))  # (H, W, 1)
-    x = torch.tensor(feature.transpose(2, 0, 1), dtype=torch.float32).unsqueeze(0)  # (1, 3, H, W)
+    x = torch.tensor(feature.transpose(2, 0, 1), dtype=torch.float32).unsqueeze(0)  # (1, C, H, W)
+    # GPDL expects 3 channels -- pad with zeros if only 2 features available
+    if x.shape[1] == 2:
+        zeros = torch.zeros_like(x[:, :1, :, :])
+        x = torch.cat([x, zeros], dim=1)  # (1, 3, H, W)
     y = torch.tensor(label.squeeze(-1), dtype=torch.float32)  # (H, W)
     return x, y
 

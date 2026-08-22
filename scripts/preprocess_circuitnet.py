@@ -27,11 +27,18 @@ import torch
 from torch_geometric.data import Data
 
 
-def build_grid_graph(feature_map, label_map):
+def build_grid_graph(feature_map, label_map, target_size=64):
     """
     feature_map: (H, W, C) array
     label_map: (H, W) or (H, W, 1) array
     """
+    from scipy.ndimage import zoom
+    # Downsample to target_size x target_size
+    H_orig, W_orig = feature_map.shape[:2]
+    if H_orig != target_size or W_orig != target_size:
+        scale = target_size / H_orig
+        feature_map = zoom(feature_map, (scale, scale, 1), order=1)
+        label_map = zoom(label_map.reshape(H_orig, W_orig), (scale, scale), order=1)
     H, W, _ = feature_map.shape
     label_map = label_map.reshape(H, W)
 
