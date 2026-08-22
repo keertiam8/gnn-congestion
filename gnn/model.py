@@ -21,7 +21,7 @@ from torch_geometric.data import Data
 
 
 class CongestionGNN(nn.Module):
-    def __init__(self, in_channels=2, hidden_channels=64, num_layers=4, heads=4, dropout=0.1, out_channels=2):
+    def __init__(self, in_channels=2, hidden_channels=64, num_layers=4, heads=4, dropout=0.1, out_channels=1):
         super().__init__()
 
         # Project 2 input channels (macro_region + rudy) → 64 hidden dims
@@ -78,7 +78,9 @@ class CongestionGNN(nn.Module):
         # Concatenate skip: (N, 64) || (N, 64) → (N, 128)
         # Then compress: (N, 128) → (N, 32) → (N, 2)
         out = self.head(torch.cat([h0, h], dim=-1))
-        return out  # (N, 2): [horizontal_overflow, vertical_overflow]
+        if out.shape[-1] == 1:
+            out = out.squeeze(-1)  # (N, 1) -> (N,) to match single-channel labels
+        return out
 
 
 def nodes_to_grid_heatmap(node_scores, node_xy, grid_size=(64, 64), die_area=None):
@@ -160,21 +162,15 @@ class CongestionTrainer:
 
     def loss_fn(self, pred, target):
         """
-        Args:
-            pred:   (N, 2) predicted [h_overflow, v_overflow]
-            target: (N, 2) real      [h_overflow, v_overflow]
+        Works for both:
+        - single-channel labels (N,)  -- netlist graphs, combined h+v congestion
+        - multi-channel labels  (N,C) -- grid graphs, separate h/v overflow
         """
-        # Weighted MSE — penalize high-congestion regions more
-        weight = 1.0 + self.peak_weight * target          # (N, 2)
+        weight = 1.0 + self.peak_weight * target
         weighted_mse = (weight * (pred - target) ** 2).mean()
-
-        # Variance penalty per channel, averaged across channels
-        variance_penalty = (
-            (pred[:, 0].std() - target[:, 0].std()) ** 2 +   # horizontal
-            (pred[:, 1].std() - target[:, 1].std()) ** 2      # vertical
-        ) / 2
-
+        variance_penalty = (pred.std() - target.std()) ** 2
         return weighted_mse + self.variance_weight * variance_penalty
+
 
 
     def pretrain_epoch(self, dataloader):
